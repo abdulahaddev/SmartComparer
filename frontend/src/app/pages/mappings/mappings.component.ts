@@ -97,16 +97,12 @@ import { ApiService } from '../../services/api.service';
                 <input type="text" [(ngModel)]="strategyFields.price_selector" name="price_selector" placeholder=".product-price .amount" />
               </div>
               <div class="form-group">
-                <label>Stock CSS Selector (optional)</label>
-                <input type="text" [(ngModel)]="strategyFields.stock_selector" name="stock_selector" placeholder=".stock-status" />
+                <label>Extract From (textContent or attribute name)</label>
+                <input type="text" [(ngModel)]="strategyFields.price_attribute" name="price_attribute" placeholder="textContent" />
               </div>
               <div class="form-group">
                 <label>Wait For Selector (optional)</label>
                 <input type="text" [(ngModel)]="strategyFields.wait_for" name="wait_for" placeholder=".product-price" />
-              </div>
-              <div class="form-group">
-                <label>Currency Symbol (optional)</label>
-                <input type="text" [(ngModel)]="strategyFields.currency_symbol" name="currency_symbol" placeholder="৳" />
               </div>
               <div class="form-group" *ngIf="editingId">
                 <label class="checkbox-label">
@@ -190,7 +186,7 @@ export class MappingsComponent implements OnInit {
   editingId: number | null = null;
   saving = false;
   formData: any = { product_id: null, competitor_id: null, url: '', is_active: true };
-  strategyFields = { price_selector: '', stock_selector: '', wait_for: '', currency_symbol: '' };
+  strategyFields = { price_selector: '', price_attribute: 'textContent', wait_for: '' };
 
   constructor(private api: ApiService) {}
 
@@ -211,7 +207,7 @@ export class MappingsComponent implements OnInit {
   openAdd() {
     this.editingId = null;
     this.formData = { product_id: null, competitor_id: null, url: '', is_active: true };
-    this.strategyFields = { price_selector: '', stock_selector: '', wait_for: '', currency_symbol: '' };
+    this.strategyFields = { price_selector: '', price_attribute: 'textContent', wait_for: '' };
     this.showForm = true;
   }
 
@@ -221,9 +217,8 @@ export class MappingsComponent implements OnInit {
     const s = m.strategy_json || {};
     this.strategyFields = {
       price_selector: s.price_selector || '',
-      stock_selector: s.stock_selector || '',
+      price_attribute: s.price_attribute || 'textContent',
       wait_for: s.wait_for || '',
-      currency_symbol: s.currency_symbol || '',
     };
     this.showForm = true;
   }
@@ -234,9 +229,8 @@ export class MappingsComponent implements OnInit {
     // Build strategy JSON from fields (omit empty)
     const strategy: any = {};
     if (this.strategyFields.price_selector) strategy.price_selector = this.strategyFields.price_selector;
-    if (this.strategyFields.stock_selector) strategy.stock_selector = this.strategyFields.stock_selector;
+    if (this.strategyFields.price_attribute) strategy.price_attribute = this.strategyFields.price_attribute;
     if (this.strategyFields.wait_for) strategy.wait_for = this.strategyFields.wait_for;
-    if (this.strategyFields.currency_symbol) strategy.currency_symbol = this.strategyFields.currency_symbol;
 
     const payload: any = {
       ...this.formData,

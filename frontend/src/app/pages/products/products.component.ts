@@ -1,12 +1,15 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { ApiService } from '../../services/api.service';
+import { ChartConfiguration, ChartOptions } from 'chart.js';
+import { BaseChartDirective } from 'ng2-charts';
 
 @Component({
   selector: 'app-products',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, BaseChartDirective],
   template: `
     <div class="page">
       <div class="page-header">
@@ -66,7 +69,10 @@ import { ApiService } from '../../services/api.service';
                 </td>
                 <td class="muted">{{ p.updated_at | date:'short' }}</td>
                 <td>
-                  <button class="btn-sm" (click)="viewHistory(p)" title="View price history">📈</button>
+                  <div class="action-btns">
+                    <button class="btn-sm" (click)="viewHistory(p)" title="View price history">📈</button>
+                    <button class="btn-sm map-btn" (click)="mapProduct(p)" title="Visual Mapper">🎯 Map</button>
+                  </div>
                 </td>
               </tr>
               <tr *ngIf="products.length === 0">
@@ -92,6 +98,15 @@ import { ApiService } from '../../services/api.service';
           <div class="modal-body">
             <div *ngIf="historyLoading" class="loading">Loading...</div>
             <div *ngIf="!historyLoading && priceHistory.length === 0" class="empty">No price history yet.</div>
+            
+            <div *ngIf="priceHistory.length > 0" class="chart-container">
+              <canvas baseChart
+                [data]="chartData"
+                [options]="chartOptions"
+                [type]="'line'">
+              </canvas>
+            </div>
+
             <div class="table-wrapper" *ngIf="priceHistory.length > 0">
               <table>
                 <thead>
@@ -100,7 +115,6 @@ import { ApiService } from '../../services/api.service';
                     <th>Price</th>
                     <th>Diff</th>
                     <th>Diff %</th>
-                    <th>Stock</th>
                     <th>Date</th>
                   </tr>
                 </thead>
@@ -113,9 +127,6 @@ import { ApiService } from '../../services/api.service';
                     </td>
                     <td class="mono" [ngClass]="{'lower': h.price_diff_percent < 0, 'higher': h.price_diff_percent > 0}">
                       {{ h.price_diff_percent | number:'1.1-1' }}%
-                    </td>
-                    <td>
-                      <span class="badge" [ngClass]="h.stock === 'in_stock' ? 'active' : 'inactive'">{{ h.stock }}</span>
                     </td>
                     <td class="muted">{{ h.scraped_at | date:'medium' }}</td>
                   </tr>
@@ -208,6 +219,9 @@ import { ApiService } from '../../services/api.service';
     }
     .btn-sm:hover:not(:disabled) { background: rgba(102, 126, 234, 0.2); }
     .btn-sm:disabled { opacity: 0.4; cursor: not-allowed; }
+    .action-btns { display: flex; gap: 6px; }
+    .map-btn { background: rgba(118, 75, 162, 0.1); border-color: rgba(118, 75, 162, 0.2); color: #764ba2; }
+    .map-btn:hover { background: rgba(118, 75, 162, 0.2); }
 
     .pagination {
       display: flex; justify-content: center; align-items: center; gap: 16px;
@@ -236,6 +250,11 @@ import { ApiService } from '../../services/api.service';
     }
     .modal-close:hover { color: #e0e0f0; }
     .modal-body { padding: 0; overflow-y: auto; flex: 1; }
+    .chart-container {
+      height: 300px;
+      padding: 20px 24px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
     .loading { text-align: center; padding: 40px; color: #6b6b8d; }
   `],
 })
@@ -254,7 +273,21 @@ export class ProductsComponent implements OnInit {
   priceHistory: any[] = [];
   historyLoading = false;
 
-  constructor(private api: ApiService) {}
+  chartData: ChartConfiguration<'line'>['data'] = { labels: [], datasets: [] };
+  chartOptions: ChartOptions<'line'> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { labels: { color: '#e0e0f0' } },
+      tooltip: { mode: 'index', intersect: false }
+    },
+    scales: {
+      x: { ticks: { color: '#8b8bae' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+      y: { ticks: { color: '#8b8bae' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+    }
+  };
+
+  constructor(private api: ApiService, private router: Router) {}
 
   ngOnInit() {
     this.loadProducts();
@@ -296,11 +329,70 @@ export class ProductsComponent implements OnInit {
     this.api.getProductPriceHistory(product.id).subscribe({
       next: (data) => {
         this.priceHistory = data;
+        this.setupChart();
         this.historyLoading = false;
       },
       error: () => {
         this.historyLoading = false;
       },
     });
+  }
+
+  mapProduct(product: any) {
+    this.router.navigate(['/visual-mapper'], {
+      queryParams: { product_id: product.id },
+    });
+  }
+
+  setupChart() {
+    if (!this.priceHistory || this.priceHistory.length === 0) return;
+
+    // Group history by date to build the x-axis labels
+    // Sort chronologically ascending
+    const sorted = [...this.priceHistory].sort((a, b) => new Date(a.scraped_at).getTime() - new Date(b.scraped_at).getTime());
+    
+    const xLabels = Array.from(new Set(sorted.map(h => new Date(h.scraped_at).toLocaleDateString())));
+
+    // Group by competitor
+    const grouped: any = {};
+    for (const h of sorted) {
+      if (!grouped[h.competitor_name]) grouped[h.competitor_name] = [];
+      grouped[h.competitor_name].push(h);
+    }
+
+    const datasets: any[] = [];
+    
+    // Competitor lines
+    let colors = ['#667eea', '#ed8936', '#38b2ac', '#ed64a6', '#9f7aea'];
+    let cIdx = 0;
+    
+    for (const comp in grouped) {
+      const dataPoints = xLabels.map(label => {
+        const point = grouped[comp].filter((h: any) => new Date(h.scraped_at).toLocaleDateString() === label).pop();
+        return point ? point.price : null;
+      });
+      datasets.push({
+        label: comp,
+        data: dataPoints,
+        borderColor: colors[cIdx % colors.length],
+        tension: 0.1,
+        spanGaps: true
+      });
+      cIdx++;
+    }
+
+    // Add internal product price line
+    datasets.push({
+      label: 'Our Price',
+      data: xLabels.map(() => this.selectedProduct.current_price),
+      borderColor: '#22c55e',
+      borderDash: [5, 5],
+      tension: 0
+    });
+
+    this.chartData = {
+      labels: xLabels,
+      datasets: datasets
+    };
   }
 }

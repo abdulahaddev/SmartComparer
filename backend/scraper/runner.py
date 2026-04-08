@@ -80,7 +80,7 @@ async def run_scrape(db: Session) -> ScrapeRun:
                 competitor_product_id=mapping.id,
                 run_id=run.id,
                 price=result["price"],
-                stock=result.get("stock", "unknown"),
+                stock="unknown",
                 price_diff=price_diff,
                 price_diff_percent=price_diff_percent,
             )

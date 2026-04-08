@@ -42,6 +42,12 @@ import { AuthService } from '../../services/auth.service';
             </a>
           </li>
           <li>
+            <a routerLink="/visual-mapper" routerLinkActive="active">
+              <span class="nav-icon">🎯</span>
+              <span>Visual Mapper</span>
+            </a>
+          </li>
+          <li>
             <a routerLink="/scrape-runs" routerLinkActive="active">
               <span class="nav-icon">🔄</span>
               <span>Scrape Runs</span>

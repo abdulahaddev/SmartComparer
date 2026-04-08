@@ -103,4 +103,10 @@ export class ApiService {
   getPriceComparison(): Observable<any> {
     return this.http.get(`${this.apiUrl}/dashboard/price-comparison`);
   }
+
+  // ─── Proxy ─────────────────────────────────────────────
+  getProxyPageUrl(url: string): string {
+    const token = localStorage.getItem('sc_token');
+    return `${this.apiUrl}/proxy/page?url=${encodeURIComponent(url)}&token=${token}`;
+  }
 }

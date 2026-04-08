@@ -10,6 +10,7 @@ from competitors.router import router as competitors_router
 from competitor_products.router import router as cp_router
 from scraping.router import router as scraping_router
 from dashboard.router import router as dashboard_router
+from proxy.router import router as proxy_router
 
 # Configure logging
 logging.basicConfig(
@@ -49,6 +50,7 @@ app.include_router(competitors_router)
 app.include_router(cp_router)
 app.include_router(scraping_router)
 app.include_router(dashboard_router)
+app.include_router(proxy_router)
 
 
 @app.get("/", tags=["Root"])

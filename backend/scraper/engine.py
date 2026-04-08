@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Optional
 from playwright.async_api import async_playwright
-from scraper.parser import parse_price, parse_stock
+from scraper.parser import parse_price
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -17,27 +17,28 @@ async def scrape_product(
 
     Args:
         url: The full URL of the product page.
-        strategy: Dict with keys like 'price_selector', 'stock_selector', 'wait_for', 'currency_symbol'.
+        strategy: Dict with keys like:
+            - price_selector: CSS selector for the price element
+            - price_attribute: 'textContent' or an attribute name (e.g., 'content')
+            - remove_chars: list of characters to strip from price text
+            - wait_for: CSS selector to wait for before extraction
         timeout: Timeout in seconds (defaults to settings.SCRAPE_TIMEOUT_SECONDS).
 
     Returns:
-        dict with keys: 'price', 'stock', 'raw_price', 'raw_stock', 'success', 'error'
+        dict with keys: 'price', 'raw_price', 'success', 'error'
     """
     if timeout is None:
         timeout = settings.SCRAPE_TIMEOUT_SECONDS
 
     price_selector = strategy.get("price_selector", "")
-    stock_selector = strategy.get("stock_selector", "")
     wait_for = strategy.get("wait_for", price_selector)
-    currency_symbol = strategy.get("currency_symbol", None)
     price_attribute = strategy.get("price_attribute", "textContent")
+    remove_chars = strategy.get("remove_chars", None)
 
     if not price_selector:
         return {
             "price": None,
-            "stock": "unknown",
             "raw_price": "",
-            "raw_stock": "",
             "success": False,
             "error": "No price_selector in strategy",
         }
@@ -62,22 +63,12 @@ async def scrape_product(
                 else:
                     raw_price = await price_element.get_attribute(price_attribute) or ""
 
-            # Extract stock
-            raw_stock = ""
-            if stock_selector:
-                stock_element = await page.query_selector(stock_selector)
-                if stock_element:
-                    raw_stock = await stock_element.text_content() or ""
-
-            # Parse values
-            price = parse_price(raw_price.strip(), currency_symbol)
-            stock = parse_stock(raw_stock.strip()) if raw_stock else "unknown"
+            # Parse price
+            price = parse_price(raw_price.strip(), remove_chars=remove_chars)
 
             return {
                 "price": price,
-                "stock": stock,
                 "raw_price": raw_price.strip(),
-                "raw_stock": raw_stock.strip(),
                 "success": price is not None,
                 "error": None if price is not None else "Failed to extract price",
             }
@@ -86,9 +77,7 @@ async def scrape_product(
             logger.error(f"Scraping error for {url}: {str(e)}")
             return {
                 "price": None,
-                "stock": "unknown",
                 "raw_price": "",
-                "raw_stock": "",
                 "success": False,
                 "error": str(e),
             }
@@ -128,9 +117,7 @@ async def scrape_with_retry(
 
     return {
         "price": None,
-        "stock": "unknown",
         "raw_price": "",
-        "raw_stock": "",
         "success": False,
         "error": last_error,
         "attempts": max_retries,

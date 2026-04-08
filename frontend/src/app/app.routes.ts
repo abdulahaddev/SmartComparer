@@ -7,6 +7,7 @@ import { ProductsComponent } from './pages/products/products.component';
 import { CompetitorsComponent } from './pages/competitors/competitors.component';
 import { MappingsComponent } from './pages/mappings/mappings.component';
 import { ScrapeRunsComponent } from './pages/scrape-runs/scrape-runs.component';
+import { VisualMapperComponent } from './pages/visual-mapper/visual-mapper.component';
 
 export const routes: Routes = [
   { path: 'login', component: LoginComponent },
@@ -19,6 +20,7 @@ export const routes: Routes = [
       { path: 'products', component: ProductsComponent },
       { path: 'competitors', component: CompetitorsComponent },
       { path: 'mappings', component: MappingsComponent },
+      { path: 'visual-mapper', component: VisualMapperComponent },
       { path: 'scrape-runs', component: ScrapeRunsComponent },
       { path: '', redirectTo: 'dashboard', pathMatch: 'full' },
     ],
