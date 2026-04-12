@@ -1,0 +1,37 @@
+# --- OS / Tools ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# --- Backend (Python/FastAPI) ---
+backend/__pycache__/
+backend/*.pyc
+backend/*.pyo
+backend/*.pyd
+backend/.pytest_cache/
+backend/.coverage
+backend/htmlcov/
+backend/venv/
+backend/.env
+backend/*.sqlite3
+backend/scripts/__pycache__/
+
+# --- Frontend (Angular) ---
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.editorconfig
+frontend/.browserslistrc
+
+# --- Project Specific ---
+*.log
+tmp/
+temp/
+out/
+bin/
