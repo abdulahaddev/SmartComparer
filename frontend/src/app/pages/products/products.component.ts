@@ -328,7 +328,7 @@ export class ProductsComponent implements OnInit {
 
     this.api.getProductPriceHistory(product.id).subscribe({
       next: (data) => {
-        this.priceHistory = data;
+        this.priceHistory = data.filter((h: any) => h.price !== null);
         this.setupChart();
         this.historyLoading = false;
       },

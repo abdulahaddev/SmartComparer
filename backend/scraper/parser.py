@@ -34,7 +34,7 @@ def parse_price(
     # Remove custom characters (from visual mapper configuration)
     if remove_chars:
         for ch in remove_chars:
-            text = text.replace(ch, "")
+            text = text.replace(ch, " ")
 
     # Remove specific currency symbol if provided
     if currency_symbol:
@@ -69,11 +69,19 @@ def parse_price(
         # Multiple commas: thousand separators
         text = text.replace(",", "")
 
-    # Remove any remaining non-numeric characters except . and -
-    text = re.sub(r"[^\d.\-]", "", text)
+    # Remove any remaining non-numeric characters except ., -, and spaces
+    text = re.sub(r"[^\d.\-\s]", "", text)
 
     if not text:
         return None
+
+    # Take only the first continuous number block to handle appended percentages
+    # like "750.00-13.04" becoming "750.00".
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+        
+    text = match.group(0)
 
     try:
         return Decimal(text)

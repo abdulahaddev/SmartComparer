@@ -86,16 +86,17 @@ async def run_scrape(db: Session) -> ScrapeRun:
                     except Exception as e:
                         logger.warning(f"Price diff calculation failed for {mapping.url}: {e}")
 
-                # 4. Store price history
-                history = PriceHistory(
-                    competitor_product_id=mapping.id,
-                    run_id=run.id,
-                    price=result["price"],
-                    stock="unknown",
-                    price_diff=price_diff,
-                    price_diff_percent=price_diff_percent,
-                )
-                task_db.add(history)
+                # 4. Store price history (only if we got a valid price)
+                if result["price"] is not None:
+                    history = PriceHistory(
+                        competitor_product_id=mapping.id,
+                        run_id=run.id,
+                        price=result["price"],
+                        stock="unknown",
+                        price_diff=price_diff,
+                        price_diff_percent=price_diff_percent,
+                    )
+                    task_db.add(history)
 
                 # Store scrape log
                 log_status = "success" if result["success"] else "failed"

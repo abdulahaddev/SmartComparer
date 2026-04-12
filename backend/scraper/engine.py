@@ -83,60 +83,93 @@ async def scrape_product(
         logger.debug(f"HTTP fetch error for {url}: {str(e)}, falling back to Playwright")
 
     # --- Phase 2: Full Browser Fallback (JS Enabled) ---
-    async with async_playwright() as p:
-        try:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+    # Run Playwright in a dedicated thread with its own event loop.
+    # This avoids the Windows NotImplementedError when the main loop
+    # is a SelectorEventLoop (which can't spawn subprocesses).
+    import concurrent.futures
+    import sys
 
-            await page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
+    async def _run_playwright():
+        async with async_playwright() as p:
+            try:
+                browser = await p.chromium.launch(headless=True)
+                # Use a realistic User-Agent and viewport to bypass basic anti-bot blocks
+                page = await browser.new_page(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080}
+                )
 
-            # Wait for the target element to appear (with a slightly shorter timeout to allow for retries)
-            if wait_for:
-                try:
-                    await page.wait_for_selector(wait_for, timeout=(timeout // 2) * 1000)
-                except Exception as e:
-                    logger.debug(f"Timeout waiting for selector {wait_for} on {url}, trying best-effort extraction.")
+                await page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
 
-            # Extract price
-            raw_price = ""
-            price_element = await page.query_selector(price_selector)
-            
-            # If element exists but might be empty (skeleton screen), wait a bit more
-            if price_element:
-                text = await price_element.text_content()
-                if not text or not text.strip():
-                    logger.info(f"Price element empty for {url}, waiting for content...")
-                    await asyncio.sleep(2)
+                # Wait for the target element to appear
+                if wait_for:
+                    try:
+                        await page.wait_for_selector(wait_for, timeout=(timeout // 2) * 1000)
+                    except Exception:
+                        logger.debug(f"Timeout waiting for selector {wait_for} on {url}, trying best-effort extraction.")
+
+                # Extract price
+                raw_price = ""
+                price_element = await page.query_selector(price_selector)
+
+                if price_element:
                     text = await price_element.text_content()
-                
-                if price_attribute == "textContent":
-                    raw_price = text or ""
-                else:
-                    raw_price = await price_element.get_attribute(price_attribute) or ""
+                    if not text or not text.strip():
+                        logger.info(f"Price element empty for {url}, waiting for content...")
+                        await asyncio.sleep(2)
+                        # The DOM might have re-rendered (React/Vue), making the old handle stale.
+                        # Re-query the element to avoid 'DOM.describeNode' protocol errors.
+                        price_element = await page.query_selector(price_selector)
+                        if price_element:
+                            text = await price_element.text_content()
+                        else:
+                            text = ""
 
-            # Parse price
-            price = parse_price(raw_price.strip(), remove_chars=remove_chars)
+                    if price_element:
+                        if price_attribute == "textContent":
+                            raw_price = text or ""
+                        else:
+                            raw_price = await price_element.get_attribute(price_attribute) or ""
 
-            return {
-                "price": price,
-                "raw_price": raw_price.strip(),
-                "success": price is not None,
-                "error": None if price is not None else "Failed to parse price from extracted text",
-                "method": "playwright"
-            }
+                price = parse_price(raw_price.strip(), remove_chars=remove_chars)
 
-        except Exception as e:
-            logger.error(f"Scraping error for {url}: {str(e)}")
-            return {
-                "price": None,
-                "raw_price": "",
-                "success": False,
-                "error": str(e),
-                "method": "failed"
-            }
+                return {
+                    "price": price,
+                    "raw_price": raw_price.strip(),
+                    "success": price is not None,
+                    "error": None if price is not None else "Failed to parse price from extracted text",
+                    "method": "playwright"
+                }
+
+            except Exception as e:
+                logger.error(f"Scraping error for {url}: {str(e)}")
+                return {
+                    "price": None,
+                    "raw_price": "",
+                    "success": False,
+                    "error": str(e),
+                    "method": "failed"
+                }
+            finally:
+                if 'browser' in locals():
+                    await browser.close()
+
+    def _thread_runner():
+        """Run Playwright in a new event loop inside a thread."""
+        if sys.platform == 'win32':
+            loop = asyncio.ProactorEventLoop()
+        else:
+            loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(_run_playwright())
         finally:
-            if 'browser' in locals():
-                await browser.close()
+            loop.close()
+
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        result = await loop.run_in_executor(pool, _thread_runner)
+    return result
 
 
 async def scrape_with_retry(

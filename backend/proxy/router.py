@@ -11,27 +11,30 @@ from auth.dependencies import get_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/proxy", tags=["Proxy"])
 
-# The DOM selection script injected into proxied pages (price-only, captures attributes)
 NEUTRALIZER_SCRIPT = """
 <script id="sc-neutralizer">
 (function() {
   const PROXY_TOKEN = "{{TOKEN}}";
   const TARGET_ORIGIN = "{{TARGET_ORIGIN}}";
   const PROXY_RE = "/proxy/res";
+  const LOCAL_ORIGIN = window.location.origin;
   
   // Helper to rewrite URLs to go through our proxy
   const interceptUrl = (url) => {
     if (!url || typeof url !== 'string') return url;
     if (url.includes(PROXY_RE)) return url; // Already proxied
+    if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('javascript:')) return url;
     
     try {
-      // Resolve relative to target origin
       const resolved = new URL(url, TARGET_ORIGIN).href;
       const parsed = new URL(resolved);
       
-      // Only proxy if it belongs to the target domain
-      if (parsed.origin === TARGET_ORIGIN) {
-        return `${window.location.origin}${PROXY_RE}?url=${encodeURIComponent(resolved)}&token=${PROXY_TOKEN}`;
+      // Skip if it's already our own proxy server
+      if (parsed.origin === LOCAL_ORIGIN) return url;
+      
+      // Proxy ALL external HTTP/HTTPS requests to avoid CORS
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return `${LOCAL_ORIGIN}${PROXY_RE}?url=${encodeURIComponent(resolved)}&token=${PROXY_TOKEN}`;
       }
     } catch(e) {}
     return url;
@@ -51,7 +54,7 @@ NEUTRALIZER_SCRIPT = """
       }
       return fn.call(this, state, title, url);
     } catch (e) {
-      // Sliently handle Next.js router errors
+      // Silently handle Next.js router errors
     }
   };
   
@@ -61,28 +64,89 @@ NEUTRALIZER_SCRIPT = """
   // 2. Intercept Fetch and XMLHttpRequest to bypass CORS
   const originalFetch = window.fetch;
   window.fetch = function(input, init) {
-    if (typeof input === 'string') {
-      input = interceptUrl(input);
-    } else if (input instanceof Request) {
-      // We can't easily modify Request objects, but we can wrap them
-      // for simple Next.js data fetches this is usually strings
-    }
-    return originalFetch.apply(this, arguments);
+    try {
+      if (typeof input === 'string') {
+        input = interceptUrl(input);
+      } else if (input instanceof Request) {
+        const newUrl = interceptUrl(input.url);
+        if (newUrl !== input.url) {
+          input = new Request(newUrl, input);
+        }
+      }
+    } catch(e) {}
+    return originalFetch.call(this, input, init);
   };
 
   const originalXHR = window.XMLHttpRequest.prototype.open;
   window.XMLHttpRequest.prototype.open = function(method, url) {
-    arguments[1] = interceptUrl(url);
+    try {
+      arguments[1] = interceptUrl(url);
+    } catch(e) {}
     return originalXHR.apply(this, arguments);
   };
 
-  // 3. Neutralize Service Workers
-  if (navigator.serviceWorker) {
-    navigator.serviceWorker.register = function() {
-      console.warn('Blocked Service Worker registration for proxy safety');
-      return new Promise(() => {}); 
-    };
+  // 3. Intercept dynamic script/img/link creation
+  const originalSetAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function(name, value) {
+    if ((name === 'src' || name === 'href') && typeof value === 'string') {
+      try {
+        const tag = this.tagName.toLowerCase();
+        // Only intercept script src and link[rel=stylesheet] href
+        if (tag === 'script' || (tag === 'link' && this.getAttribute('rel') === 'stylesheet')) {
+          // Don't intercept these - they need to load normally for page render
+        }
+      } catch(e) {}
+    }
+    return originalSetAttribute.call(this, name, value);
+  };
+
+  // 4. Fake out annoying frame busters
+  if (window.top !== window.self) {
+    Object.defineProperty(window, 'top', { value: window.self, configurable: false, writable: false });
+    Object.defineProperty(window, 'parent', { value: window.self, configurable: false, writable: false });
   }
+
+  // 4. Force enable right-click and selection (bypass aggressive anti-bot scripts)
+  window.addEventListener('contextmenu', e => e.stopPropagation(), true);
+  window.addEventListener('selectstart', e => e.stopPropagation(), true);
+  window.addEventListener('copy', e => e.stopPropagation(), true);
+  window.addEventListener('paste', e => e.stopPropagation(), true);
+  
+  // Revert inline styles blocking selection once DOM loads
+  const observer = new MutationObserver(() => {
+    if(document.body) {
+      document.body.style.userSelect = 'auto';
+      document.body.style.webkitUserSelect = 'auto';
+    }
+  });
+  observer.observe(document.documentElement, {childList: true, subtree: true});
+
+  // 5. Bypass basic ServiceWorker caching restrictions
+  if (navigator.serviceWorker) {
+    try {
+      Object.defineProperty(navigator, 'serviceWorker', {
+        value: {
+          register: () => Promise.resolve({}),
+          ready: Promise.resolve({}),
+          controller: null
+        },
+        configurable: true
+      });
+    } catch(e) {}
+  }
+
+  // 5. Suppress common third-party errors
+  window.addEventListener('error', function(e) {
+    if (e.message && (e.message.includes('CORS') || e.message.includes('cross-origin'))) {
+      e.preventDefault();
+    }
+  }, true);
+
+  window.addEventListener('unhandledrejection', function(e) {
+    if (e.reason && String(e.reason).includes('CORS')) {
+      e.preventDefault();
+    }
+  });
 })();
 </script>
 """
@@ -426,12 +490,25 @@ def inject_script_and_clean(html: str, base_url: str, token: str) -> str:
     return html
 
 
-@router.get("/page", response_class=HTMLResponse)
+@router.api_route("/page", methods=["GET", "OPTIONS"], response_class=HTMLResponse)
 async def proxy_page(
+    request: Request,
     url: str = Query(..., description="URL to proxy"),
     token: str = Query(..., description="JWT token (for iframe access)"),
 ):
     """Fetch a competitor page, inject selection script, and serve it."""
+    # Handle preflight
+    if request.method == "OPTIONS":
+        return Response(
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Max-Age": "86400",
+            },
+        )
+
     # Validate token
     from auth.jwt import verify_token
     username = verify_token(token)
@@ -447,6 +524,7 @@ async def proxy_page(
         async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=30.0,
+            verify=False,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Referer": f"{parsed.scheme}://{parsed.netloc}/",
@@ -474,11 +552,13 @@ async def proxy_page(
         headers={
             "X-Frame-Options": "ALLOWALL",
             "Content-Security-Policy": "",
+            "Access-Control-Allow-Origin": "*",
+            "Permissions-Policy": "unload=*",
         },
     )
 
 
-@router.api_route("/res", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"])
+@router.api_route("/res", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"])
 async def proxy_resource(
     request: Request,
     url: str = Query(..., description="URL to proxy"),
@@ -488,6 +568,18 @@ async def proxy_resource(
     
     Supports all HTTP methods and forwards bodies/headers.
     """
+    # Handle preflight immediately
+    if request.method == "OPTIONS":
+        return Response(
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Max-Age": "86400",
+            },
+        )
+
     from auth.jwt import verify_token
     if not verify_token(token):
         raise HTTPException(status_code=401)
@@ -495,36 +587,45 @@ async def proxy_resource(
     parsed = urlparse(url)
     
     # Filter headers to pass to target
-    forbidden_headers = {'host', 'connection', 'content-length'}
+    forbidden_headers = {'host', 'connection', 'content-length', 'transfer-encoding', 'accept-encoding'}
     headers = {k: v for k, v in request.headers.items() if k.lower() not in forbidden_headers}
     headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
     headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
+    # Remove our proxy host header
+    headers.pop("host", None)
 
     try:
         async with httpx.AsyncClient(
             follow_redirects=True,
             timeout=30.0,
-            verify=False # Some sites use local certs or tricky SSL
+            verify=False
         ) as client:
             resp = await client.request(
                 method=request.method,
                 url=url,
                 content=await request.body(),
                 headers=headers,
-                params=request.query_params
             )
             
-            # Forward binary or text content
+            # Build response headers - strip problematic upstream headers
+            resp_headers = {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Expose-Headers": "*",
+            }
+            
+            # Forward cache headers from upstream if present
+            for h in ['cache-control', 'etag', 'last-modified']:
+                if h in resp.headers:
+                    resp_headers[h] = resp.headers[h]
+            
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
                 media_type=resp.headers.get("content-type"),
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "*",
-                    "Access-Control-Allow-Headers": "*",
-                }
+                headers=resp_headers,
             )
     except Exception as e:
         logger.error(f"Proxy Resource Error: {str(e)}")

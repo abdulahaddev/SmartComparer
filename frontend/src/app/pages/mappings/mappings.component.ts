@@ -1,6 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { ApiService } from '../../services/api.service';
 
 @Component({
@@ -52,8 +53,9 @@ import { ApiService } from '../../services/api.service';
                 </td>
                 <td>
                   <div class="actions">
+                    <button class="btn-icon map" (click)="mapVisually(m)" title="Visual Mapper">🎯</button>
                     <button class="btn-icon" (click)="editMapping(m)" title="Edit">✏️</button>
-                    <button class="btn-icon danger" (click)="deleteMapping(m)" title="Deactivate">🗑️</button>
+                    <button class="btn-icon danger" (click)="askDelete(m)" title="Delete">🗑️</button>
                   </div>
                 </td>
               </tr>
@@ -120,6 +122,25 @@ import { ApiService } from '../../services/api.service';
           </div>
         </div>
       </div>
+
+      <!-- Delete Confirmation Modal -->
+      <div class="modal-overlay" *ngIf="deletingMapping" (click)="cancelDelete()">
+        <div class="confirm-modal" (click)="$event.stopPropagation()">
+          <div class="confirm-icon">&#9888;</div>
+          <h3>Delete Mapping</h3>
+          <p class="confirm-text">
+            Are you sure you want to delete the mapping for
+            <strong>{{ deletingMapping.competitor_name || 'this competitor' }}</strong>?
+          </p>
+          <p class="confirm-sub">This action cannot be undone.</p>
+          <div class="confirm-actions">
+            <button class="btn btn-secondary" (click)="cancelDelete()">Cancel</button>
+            <button class="btn btn-danger" (click)="confirmDelete()" [disabled]="deleting">
+              {{ deleting ? 'Deleting...' : 'Delete' }}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   `,
   styles: [`
@@ -152,9 +173,21 @@ import { ApiService } from '../../services/api.service';
     .badge.inactive { background: rgba(107, 107, 141, 0.15); color: #6b6b8d; }
 
     .actions { display: flex; gap: 6px; }
-    .btn-icon { width: 32px; height: 32px; border-radius: 8px; border: none; background: rgba(255, 255, 255, 0.04); cursor: pointer; font-size: 14px; transition: background 0.2s; }
+    .btn-icon { width: 32px; height: 32px; border-radius: 8px; border: none; background: rgba(255, 255, 255, 0.04); cursor: pointer; font-size: 14px; transition: background 0.2s; display: flex; align-items: center; justify-content: center; }
     .btn-icon:hover { background: rgba(255, 255, 255, 0.1); }
     .btn-icon.danger:hover { background: rgba(239, 68, 68, 0.2); }
+    .btn-icon.map:hover { background: rgba(102, 126, 234, 0.2); }
+
+    .confirm-modal { width: 400px; max-width: 90vw; background: #1a1a3e; border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 16px; padding: 32px; text-align: center; }
+    .confirm-icon { font-size: 40px; margin-bottom: 12px; filter: grayscale(0); }
+    .confirm-modal h3 { font-size: 20px; color: #e0e0f0; margin: 0 0 12px; font-weight: 600; }
+    .confirm-text { color: #8b8bae; font-size: 14px; margin: 0 0 4px; line-height: 1.5; }
+    .confirm-text strong { color: #e0e0f0; }
+    .confirm-sub { color: #6b6b8d; font-size: 12px; margin: 0 0 24px; }
+    .confirm-actions { display: flex; justify-content: center; gap: 12px; }
+    .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); color: #fff; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3); }
+    .btn-danger:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4); }
+    .btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
 
     .modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
     .modal { width: 540px; max-width: 90vw; max-height: 90vh; overflow-y: auto; background: #1a1a3e; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; }
@@ -185,10 +218,12 @@ export class MappingsComponent implements OnInit {
   showForm = false;
   editingId: number | null = null;
   saving = false;
+  deleting = false;
+  deletingMapping: any = null;
   formData: any = { product_id: null, competitor_id: null, url: '', is_active: true };
   strategyFields = { price_selector: '', price_attribute: 'textContent', wait_for: '' };
 
-  constructor(private api: ApiService) {}
+  constructor(private api: ApiService, private router: Router) {}
 
   ngOnInit() {
     this.loadMappings();
@@ -196,7 +231,7 @@ export class MappingsComponent implements OnInit {
   }
 
   loadMappings() {
-    this.api.getCompetitorProducts({ include_inactive: true }).subscribe((data) => (this.mappings = data));
+    this.api.getCompetitorProducts().subscribe((data) => (this.mappings = data));
   }
 
   loadDropdowns() {
@@ -251,13 +286,42 @@ export class MappingsComponent implements OnInit {
     });
   }
 
-  deleteMapping(m: any) {
-    if (confirm('Deactivate this mapping?')) {
-      this.api.deleteCompetitorProduct(m.id).subscribe(() => this.loadMappings());
-    }
+  askDelete(m: any) {
+    this.deletingMapping = m;
+  }
+
+  cancelDelete() {
+    this.deletingMapping = null;
+    this.deleting = false;
+  }
+
+  confirmDelete() {
+    if (!this.deletingMapping) return;
+    this.deleting = true;
+    this.api.deleteCompetitorProduct(this.deletingMapping.id).subscribe({
+      next: () => {
+        this.deletingMapping = null;
+        this.deleting = false;
+        this.loadMappings();
+      },
+      error: (err) => {
+        this.deleting = false;
+        console.error('Delete failed:', err);
+      }
+    });
   }
 
   truncate(text: string, len: number): string {
     return text && text.length > len ? text.substring(0, len) + '...' : text;
+  }
+
+  mapVisually(m: any) {
+    this.router.navigate(['/visual-mapper'], {
+      queryParams: {
+        product_id: m.product_id,
+        competitor_id: m.competitor_id,
+        url: m.url,
+      },
+    });
   }
 }

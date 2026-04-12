@@ -20,9 +20,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
-# Fix Windows asyncio loop for Playwright/Subprocesses
-if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# Note: Do NOT set WindowsSelectorEventLoopPolicy here.
+# Playwright needs the default ProactorEventLoop for subprocess support.
+# The scraper engine handles this internally.
 
 
 @asynccontextmanager

@@ -50,7 +50,11 @@ def create(
     url: str,
     strategy_json: Optional[dict] = None,
 ) -> CompetitorProduct:
-    """Create a new competitor product mapping."""
+    """Create a new competitor product mapping.
+    
+    If an inactive mapping already exists for this product+competitor,
+    reactivate it with the new URL/strategy instead of creating a duplicate.
+    """
     # Validate foreign keys
     product = db.query(Product).filter(Product.id == product_id).first()
     if not product:
@@ -59,6 +63,24 @@ def create(
     competitor = db.query(Competitor).filter(Competitor.id == competitor_id).first()
     if not competitor:
         raise ValueError(f"Competitor with id {competitor_id} not found")
+
+    # Check for existing inactive mapping — reactivate instead of duplicating
+    existing = (
+        db.query(CompetitorProduct)
+        .filter(
+            CompetitorProduct.product_id == product_id,
+            CompetitorProduct.competitor_id == competitor_id,
+        )
+        .first()
+    )
+
+    if existing:
+        existing.url = url
+        existing.strategy_json = strategy_json
+        existing.is_active = True
+        db.commit()
+        db.refresh(existing)
+        return existing
 
     cp = CompetitorProduct(
         product_id=product_id,
@@ -90,6 +112,9 @@ def update(
         cp.strategy_json = strategy_json
     if is_active is not None:
         cp.is_active = is_active
+    elif not cp.is_active:
+        # Auto-reactivate: if someone updates a deleted mapping, they want it back
+        cp.is_active = True
 
     db.commit()
     db.refresh(cp)
