@@ -44,8 +44,8 @@ def parse_price(
     for symbol in CURRENCY_SYMBOLS:
         text = text.replace(symbol, "")
 
-    # Remove whitespace (including non-breaking spaces)
-    text = text.replace("\u00a0", "").replace("\xa0", "").strip()
+    # Remove whitespace (including non-breaking spaces and suspect control chars)
+    text = text.replace("\u00a0", "").replace("\xa0", "").replace("\ufffd", "").strip()
 
     # If there's a range like "1,200 - 1,500", take the first number
     if " - " in text or " – " in text:

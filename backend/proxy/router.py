@@ -3,8 +3,8 @@ import logging
 from urllib.parse import urljoin, urlparse, quote
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, Response
 
 from auth.dependencies import get_current_user
 
@@ -15,32 +15,68 @@ router = APIRouter(prefix="/proxy", tags=["Proxy"])
 NEUTRALIZER_SCRIPT = """
 <script id="sc-neutralizer">
 (function() {
-  // 1. Prevent History API SecurityErrors by stripping origin if needed or catching errors
+  const PROXY_TOKEN = "{{TOKEN}}";
+  const TARGET_ORIGIN = "{{TARGET_ORIGIN}}";
+  const PROXY_RE = "/proxy/res";
+  
+  // Helper to rewrite URLs to go through our proxy
+  const interceptUrl = (url) => {
+    if (!url || typeof url !== 'string') return url;
+    if (url.includes(PROXY_RE)) return url; // Already proxied
+    
+    try {
+      // Resolve relative to target origin
+      const resolved = new URL(url, TARGET_ORIGIN).href;
+      const parsed = new URL(resolved);
+      
+      // Only proxy if it belongs to the target domain
+      if (parsed.origin === TARGET_ORIGIN) {
+        return `${window.location.origin}${PROXY_RE}?url=${encodeURIComponent(resolved)}&token=${PROXY_TOKEN}`;
+      }
+    } catch(e) {}
+    return url;
+  };
+
+  // 1. Prevent History API SecurityErrors
   const originalPush = window.history.pushState;
   const originalReplace = window.history.replaceState;
   
-  const wrap = (fn) => function(state, title, url) {
+  const wrapHistory = (fn) => function(state, title, url) {
     try {
-      // If URL is absolute and different origin, browser throws. We can try to make it relative.
       if (url) {
-        try {
-          const parsed = new URL(url, window.location.href);
-          if (parsed.origin !== window.location.origin) {
-            // Just use the path/search to keep it same-origin
-            url = parsed.pathname + parsed.search + parsed.hash;
-          }
-        } catch(e) {}
+        const parsed = new URL(url, window.location.href);
+        if (parsed.origin !== window.location.origin) {
+          url = parsed.pathname + parsed.search + parsed.hash;
+        }
       }
       return fn.call(this, state, title, url);
     } catch (e) {
-      console.warn('Blocked History API error:', e.message);
+      // Sliently handle Next.js router errors
     }
   };
   
-  window.history.pushState = wrap(originalPush);
-  window.history.replaceState = wrap(originalReplace);
+  window.history.pushState = wrapHistory(originalPush);
+  window.history.replaceState = wrapHistory(originalReplace);
 
-  // 2. Neutralize Service Workers to prevents 404s and background interference
+  // 2. Intercept Fetch and XMLHttpRequest to bypass CORS
+  const originalFetch = window.fetch;
+  window.fetch = function(input, init) {
+    if (typeof input === 'string') {
+      input = interceptUrl(input);
+    } else if (input instanceof Request) {
+      // We can't easily modify Request objects, but we can wrap them
+      // for simple Next.js data fetches this is usually strings
+    }
+    return originalFetch.apply(this, arguments);
+  };
+
+  const originalXHR = window.XMLHttpRequest.prototype.open;
+  window.XMLHttpRequest.prototype.open = function(method, url) {
+    arguments[1] = interceptUrl(url);
+    return originalXHR.apply(this, arguments);
+  };
+
+  // 3. Neutralize Service Workers
   if (navigator.serviceWorker) {
     navigator.serviceWorker.register = function() {
       console.warn('Blocked Service Worker registration for proxy safety');
@@ -353,7 +389,7 @@ def make_urls_absolute(html: str, base_url: str) -> str:
     return html
 
 
-def inject_script_and_clean(html: str, base_url: str) -> str:
+def inject_script_and_clean(html: str, base_url: str, token: str) -> str:
     """Inject selector script, remove CSP, fix base URL."""
     # Remove Content-Security-Policy meta tags
     html = re.sub(
@@ -364,10 +400,14 @@ def inject_script_and_clean(html: str, base_url: str) -> str:
     )
 
     # Add <base> tag for relative URLs
-    base_tag = f'<base href="{base_url}" target="_blank">'
+    base_tag = f'<base href="{base_url}">'
     
     # Inject Neutralizer as very first thing in head
-    head_injection = base_tag + NEUTRALIZER_SCRIPT
+    parsed = urlparse(base_url)
+    target_origin = f"{parsed.scheme}://{parsed.netloc}"
+    
+    tokenized_neutralizer = NEUTRALIZER_SCRIPT.replace("{{TOKEN}}", token).replace("{{TARGET_ORIGIN}}", target_origin)
+    head_injection = base_tag + tokenized_neutralizer
     
     if '<head>' in html.lower():
         html = re.sub(r'<head[^>]*>', lambda m: m.group(0) + head_injection, html, count=1, flags=re.IGNORECASE)
@@ -389,19 +429,15 @@ def inject_script_and_clean(html: str, base_url: str) -> str:
 @router.get("/page", response_class=HTMLResponse)
 async def proxy_page(
     url: str = Query(..., description="URL to proxy"),
-    token: str = Query(None, description="JWT token (for iframe access)"),
+    token: str = Query(..., description="JWT token (for iframe access)"),
 ):
-    """Fetch a competitor page, inject selection script, and serve it.
-    
-    Accepts JWT token as query param since iframes cannot send Authorization headers.
-    """
+    """Fetch a competitor page, inject selection script, and serve it."""
     # Validate token
     from auth.jwt import verify_token
-    if not token:
-        raise HTTPException(status_code=401, detail="Token required")
     username = verify_token(token)
     if not username:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
     # Validate URL
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -412,8 +448,9 @@ async def proxy_page(
             follow_redirects=True,
             timeout=30.0,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Referer": f"{parsed.scheme}://{parsed.netloc}/",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
             },
         ) as client:
@@ -430,9 +467,7 @@ async def proxy_page(
         raise HTTPException(status_code=400, detail="URL did not return HTML content")
 
     html = response.text
-
-    # Inject script and fix URLs
-    modified_html = inject_script_and_clean(html, url)
+    modified_html = inject_script_and_clean(html, url, token)
 
     return HTMLResponse(
         content=modified_html,
@@ -441,3 +476,56 @@ async def proxy_page(
             "Content-Security-Policy": "",
         },
     )
+
+
+@router.api_route("/res", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"])
+async def proxy_resource(
+    request: Request,
+    url: str = Query(..., description="URL to proxy"),
+    token: str = Query(..., description="JWT token"),
+):
+    """Generic proxy for sub-resources (JSON, assets) to bypass CORS.
+    
+    Supports all HTTP methods and forwards bodies/headers.
+    """
+    from auth.jwt import verify_token
+    if not verify_token(token):
+        raise HTTPException(status_code=401)
+
+    parsed = urlparse(url)
+    
+    # Filter headers to pass to target
+    forbidden_headers = {'host', 'connection', 'content-length'}
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in forbidden_headers}
+    headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
+    headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=30.0,
+            verify=False # Some sites use local certs or tricky SSL
+        ) as client:
+            resp = await client.request(
+                method=request.method,
+                url=url,
+                content=await request.body(),
+                headers=headers,
+                params=request.query_params
+            )
+            
+            # Forward binary or text content
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("content-type"),
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
+                }
+            )
+    except Exception as e:
+        logger.error(f"Proxy Resource Error: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))

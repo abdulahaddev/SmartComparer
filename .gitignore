@@ -5,9 +5,9 @@ Thumbs.db
 .idea/
 *.swp
 *.bak
+**/__pycache__/
 
 # --- Backend (Python/FastAPI) ---
-backend/__pycache__/
 backend/*.pyc
 backend/*.pyo
 backend/*.pyd
@@ -17,7 +17,6 @@ backend/htmlcov/
 backend/venv/
 backend/.env
 backend/*.sqlite3
-backend/scripts/__pycache__/
 
 # --- Frontend (Angular) ---
 frontend/node_modules/

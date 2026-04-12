@@ -90,16 +90,27 @@ async def scrape_product(
 
             await page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
 
-            # Wait for the target element to appear
+            # Wait for the target element to appear (with a slightly shorter timeout to allow for retries)
             if wait_for:
-                await page.wait_for_selector(wait_for, timeout=timeout * 1000)
+                try:
+                    await page.wait_for_selector(wait_for, timeout=(timeout // 2) * 1000)
+                except Exception as e:
+                    logger.debug(f"Timeout waiting for selector {wait_for} on {url}, trying best-effort extraction.")
 
             # Extract price
             raw_price = ""
             price_element = await page.query_selector(price_selector)
+            
+            # If element exists but might be empty (skeleton screen), wait a bit more
             if price_element:
+                text = await price_element.text_content()
+                if not text or not text.strip():
+                    logger.info(f"Price element empty for {url}, waiting for content...")
+                    await asyncio.sleep(2)
+                    text = await price_element.text_content()
+                
                 if price_attribute == "textContent":
-                    raw_price = await price_element.text_content() or ""
+                    raw_price = text or ""
                 else:
                     raw_price = await price_element.get_attribute(price_attribute) or ""
 
@@ -110,7 +121,7 @@ async def scrape_product(
                 "price": price,
                 "raw_price": raw_price.strip(),
                 "success": price is not None,
-                "error": None if price is not None else "Failed to extract price",
+                "error": None if price is not None else "Failed to parse price from extracted text",
                 "method": "playwright"
             }
 
@@ -143,25 +154,37 @@ async def scrape_with_retry(
     if delay is None:
         delay = settings.REQUEST_DELAY_SECONDS
 
-    last_error = None
-
-    for attempt in range(1, max_retries + 1):
-        result = await scrape_product(url, strategy)
-
-        if result["success"]:
-            result["attempts"] = attempt
-            return result
-
-        last_error = result.get("error", "Unknown error")
-        logger.warning(f"Attempt {attempt}/{max_retries} failed for {url}: {last_error}")
-
-        if attempt < max_retries:
-            await asyncio.sleep(delay)
-
-    return {
+    last_error = "Never attempted"
+    res = {
         "price": None,
         "raw_price": "",
         "success": False,
-        "error": last_error,
-        "attempts": max_retries,
+        "error": "Failed after max retries",
+        "attempts": 0,
     }
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            result = await scrape_product(url, strategy)
+            res.update(result)
+            res["attempts"] = attempt
+
+            if result["success"]:
+                return res
+
+            last_error = result.get("error", "Unknown error")
+            logger.warning(f"Attempt {attempt}/{max_retries} failed for {url}: {last_error}")
+
+        except Exception as e:
+            last_error = str(e)
+            res["error"] = last_error
+            res["attempts"] = attempt
+            logger.error(f"Attempt {attempt}/{max_retries} crashed for {url}: {last_error}")
+
+        if attempt < max_retries:
+            # Incremental backoff: 2s, 4s, 6s...
+            await asyncio.sleep(delay * attempt)
+
+    res["success"] = False
+    res["error"] = last_error
+    return res
