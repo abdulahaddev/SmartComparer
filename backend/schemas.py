@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -140,20 +140,40 @@ class ScrapeLogOut(BaseModel):
 
 # ─── Dashboard ───────────────────────────────────────────────────────────────
 
+class PriceIntelligence(BaseModel):
+    min_price: Optional[float]
+    max_price: Optional[float]
+    avg_price: Optional[float]
+    rank: int
+    total_competitors: int
+    status: Literal["OVERPRICED", "COMPETITIVE", "LEADER"]
+    alert: Optional[Literal["HIGH_RISK", "MEDIUM_RISK"]]
+    opportunity: Optional[Literal["INCREASE_PRICE", "DECREASE_PRICE"]]
+    is_quick_win: bool = False
+    is_margin_booster: bool = False
+    market_type: Literal["VOLATILE", "STABLE"]
+    recommended_price: float
+
+class StatusDistribution(BaseModel):
+    leader: int = 0
+    competitive: int = 0
+    overpriced: int = 0
+
 class DashboardSummary(BaseModel):
     total_products: int
     active_products: int
     total_competitors: int
     total_mappings: int
     total_scrape_runs: int
+    status_distribution: StatusDistribution = StatusDistribution()
     last_run: Optional[ScrapeRunOut] = None
-
 
 class PriceComparisonItem(BaseModel):
     product_id: int
     product_name: str
     our_price: Optional[Decimal] = None
     competitor_prices: List[dict] = []
+    intelligence: Optional[PriceIntelligence] = None
 
 
 # ─── Sync ────────────────────────────────────────────────────────────────────

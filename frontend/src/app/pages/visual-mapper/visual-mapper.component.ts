@@ -96,7 +96,7 @@ interface PriceSelection {
               <div class="spinner"></div>
               <p>Loading competitor page...</p>
             </div>
-            <iframe #mapperIframe [src]="iframeUrl" (load)="onIframeLoad()" sandbox="allow-scripts allow-same-origin"></iframe>
+            <iframe #mapperIframe [src]="iframeUrl" (load)="onIframeLoad()" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
           </div>
         </div>
       </div>
@@ -124,23 +124,36 @@ interface PriceSelection {
 
             <!-- Extraction Mode -->
             <div class="config-section">
-              <h4>Extract Target From</h4>
-              <div class="radio-group">
-                <label class="radio-label" [class.active]="extractionMode === 'text'">
-                  <input type="radio" [(ngModel)]="extractionMode" value="text" (change)="onExtractionChange()" />
-                  <span class="radio-content">
-                    <strong>Text Content / Label</strong>
-                    <span class="radio-desc">{{ priceSelection.text }}</span>
-                  </span>
-                </label>
-                <label class="radio-label" [class.active]="extractionMode === 'attribute'"
-                  *ngFor="let attr of numericAttributes">
-                  <input type="radio" [(ngModel)]="extractionMode" value="attribute" (change)="selectedAttribute = attr.name; onExtractionChange()" />
-                  <span class="radio-content">
-                    <strong>Attribute: {{ attr.name }}</strong>
-                    <span class="radio-desc">{{ attr.value }}</span>
-                  </span>
-                </label>
+              <div class="section-header">
+                <h4>Extraction Source</h4>
+                <p class="config-hint">Select where the price value should be extracted from</p>
+              </div>
+
+              <div class="mode-cards">
+                <!-- Text Content Card -->
+                <div class="mode-card" 
+                  [class.active]="extractionMode === 'text'"
+                  (click)="extractionMode = 'text'; onExtractionChange()">
+                  <div class="card-icon">📝</div>
+                  <div class="card-content">
+                    <div class="card-title">Text Content</div>
+                    <div class="card-desc">{{ priceSelection.text }}</div>
+                  </div>
+                  <div class="card-check" *ngIf="extractionMode === 'text'">✓</div>
+                </div>
+
+                <!-- Attribute Cards -->
+                <div class="mode-card" 
+                  *ngFor="let attr of numericAttributes"
+                  [class.active]="extractionMode === 'attribute' && selectedAttribute === attr.name"
+                  (click)="extractionMode = 'attribute'; selectedAttribute = attr.name; onExtractionChange()">
+                  <div class="card-icon">🏷️</div>
+                  <div class="card-content">
+                    <div class="card-title">Attr: {{ attr.name }}</div>
+                    <div class="card-desc">{{ attr.value }}</div>
+                  </div>
+                  <div class="card-check" *ngIf="extractionMode === 'attribute' && selectedAttribute === attr.name">✓</div>
+                </div>
               </div>
 
               <!-- Manual attribute if no numeric ones detected -->
@@ -335,26 +348,42 @@ interface PriceSelection {
       border-radius: 8px; color: #22c55e; font-size: 13px; font-weight: 500;
       margin-bottom: 8px; word-break: break-word; line-height: 1.4;
     }
-    .captured-selector code {
-      display: block; padding: 8px 10px; background: rgba(15,15,35,0.6);
-      border-radius: 6px; font-size: 10px; color: #6b6b8d;
-      font-family: 'JetBrains Mono', monospace; word-break: break-all; line-height: 1.5;
-    }
+    .captured-selector code { background: rgba(0,0,0,0.2); padding: 2px 4px; border-radius: 4px; color: #888; font-size: 11px; }
 
-    /* ─── Config sections ──────────────────── */
-    .config-section { margin-bottom: 16px; padding: 14px; background: rgba(15,15,35,0.3); border-radius: 12px; border: 1px solid rgba(255,255,255,0.04); }
-    .config-hint { color: #4a4a6a; font-size: 11px; margin: 0 0 10px; }
+    .config-section { margin-bottom: 20px; padding: 18px; background: rgba(15,15,35,0.4); border-radius: 16px; border: 1px solid rgba(255,255,255,0.06); }
+    .section-header { margin-bottom: 12px; }
+    .config-hint { color: #6b6b8d; font-size: 11px; margin: 4px 0 0; }
 
-    .radio-group { display: flex; flex-direction: column; gap: 8px; }
-    .radio-label {
-      display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
-      background: rgba(15,15,35,0.3); border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 10px; cursor: pointer; transition: all 0.2s;
+    .mode-cards { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .mode-card {
+      display: flex; align-items: center; gap: 14px; padding: 14px 18px;
+      background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px; cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative; overflow: hidden;
     }
-    .radio-label:hover { border-color: rgba(34,197,94,0.2); }
-    .radio-label.active { border-color: #22c55e; background: rgba(34,197,94,0.06); }
-    .radio-label input[type="radio"] { margin-top: 3px; accent-color: #22c55e; }
-    .radio-content { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .mode-card:hover { background: rgba(255, 255, 255, 0.05); border-color: rgba(34, 197, 94, 0.3); transform: translateY(-1px); }
+    .mode-card.active {
+      background: rgba(34, 197, 94, 0.08); border-color: #22c55e;
+      box-shadow: 0 4px 12px rgba(34, 197, 94, 0.15);
+    }
+    .card-icon {
+      width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+      background: rgba(255, 255, 255, 0.05); border-radius: 10px; font-size: 20px;
+    }
+    .active .card-icon { background: rgba(34, 197, 94, 0.15); }
+    .card-content { flex: 1; min-width: 0; }
+    .card-title { font-size: 14px; font-weight: 600; color: #e0e0f0; margin-bottom: 2px; }
+    .card-desc {
+      font-size: 12px; color: #6b6b8d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .active .card-desc { color: #22c55e; }
+    .card-check {
+      width: 20px; height: 20px; background: #22c55e; color: #fff;
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: bold;
+    }
+ .radio-content { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .radio-content strong { font-size: 13px; color: #c4c4e0; }
     .radio-desc {
       font-size: 11px; color: #6b6b8d; word-break: break-all;

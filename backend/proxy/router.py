@@ -12,6 +12,45 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/proxy", tags=["Proxy"])
 
 # The DOM selection script injected into proxied pages (price-only, captures attributes)
+NEUTRALIZER_SCRIPT = """
+<script id="sc-neutralizer">
+(function() {
+  // 1. Prevent History API SecurityErrors by stripping origin if needed or catching errors
+  const originalPush = window.history.pushState;
+  const originalReplace = window.history.replaceState;
+  
+  const wrap = (fn) => function(state, title, url) {
+    try {
+      // If URL is absolute and different origin, browser throws. We can try to make it relative.
+      if (url) {
+        try {
+          const parsed = new URL(url, window.location.href);
+          if (parsed.origin !== window.location.origin) {
+            // Just use the path/search to keep it same-origin
+            url = parsed.pathname + parsed.search + parsed.hash;
+          }
+        } catch(e) {}
+      }
+      return fn.call(this, state, title, url);
+    } catch (e) {
+      console.warn('Blocked History API error:', e.message);
+    }
+  };
+  
+  window.history.pushState = wrap(originalPush);
+  window.history.replaceState = wrap(originalReplace);
+
+  // 2. Neutralize Service Workers to prevents 404s and background interference
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.register = function() {
+      console.warn('Blocked Service Worker registration for proxy safety');
+      return new Promise(() => {}); 
+    };
+  }
+})();
+</script>
+"""
+
 SELECTOR_SCRIPT = """
 <script>
 (function() {
@@ -44,42 +83,104 @@ SELECTOR_SCRIPT = """
   `;
   document.body.appendChild(tooltip);
 
-  // ─── CSS Selector Generator ──────────────────────────────
+  // ─── CSS Selector Generator (Intelligent & Robust) ───────
   function generateSelector(el) {
-    if (el.id) {
-      return '#' + CSS.escape(el.id);
+    // 1. Level 0: Perfect Match (Unique ID)
+    if (el.id && !isGeneric(el.id)) {
+      const idSelector = `#${CSS.escape(el.id)}`;
+      if (document.querySelectorAll(idSelector).length === 1) return idSelector;
     }
+
+    // 2. Level 1: Semantic Attributes
+    const semanticAttrs = ['itemprop', 'data-testid', 'data-sku', 'data-id', 'name', 'title'];
+    for (const attr of semanticAttrs) {
+      const val = el.getAttribute(attr);
+      if (val && !isGeneric(val)) {
+        const sel = `${el.tagName.toLowerCase()}[${attr}="${CSS.escape(val)}"]`;
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      }
+    }
+
+    // 3. Level 2: Unique Classes
+    const classes = Array.from(el.classList).filter(c => !isGenericClass(c));
+    for (const c of classes) {
+      const sel = `${el.tagName.toLowerCase()}.${CSS.escape(c)}`;
+      if (document.querySelectorAll(sel).length === 1) return sel;
+    }
+
+    // 4. Level 3: Minimal Hierarchical Path (Semantic Parent)
+    let path = [];
+    let current = el;
+    let depth = 0;
+    while (current && current !== document.body && depth < 5) {
+      let selector = getBestLocalSelector(current);
+      path.unshift(selector);
+      
+      const fullSelector = path.join(' > ');
+      if (document.querySelectorAll(fullSelector).length === 1) return fullSelector;
+      
+      current = current.parentElement;
+      depth++;
+    }
+
+    // 5. Fallback: Tag + Nth-Child (Last Resort, limited depth)
+    return getFullFallbackPath(el);
+  }
+
+  function isGeneric(val) {
+    return /^(col-|row|container|wrapper|clearfix|d-|p-|m-|flex|grid|layout|content|inner|outer|section|div|span|section|main|body)/i.test(val) || val.length < 2;
+  }
+
+  function isGenericClass(c) {
+    return /^(js-|wp-|wp_|col-|row|container|wrapper|clearfix|d-|p-|m-|flex|grid|active|selected|hidden|show|hide|btn|card|item)/i.test(c) || c.length < 2;
+  }
+
+  function getBestLocalSelector(el) {
+    const tag = el.tagName.toLowerCase();
+    
+    // Try unique ID on this node
+    if (el.id && !isGeneric(el.id)) return `#${CSS.escape(el.id)}`;
+    
+    // Try semantic attributes
+    const semanticAttrs = ['itemprop', 'data-product', 'name'];
+    for (const attr of semanticAttrs) {
+      const val = el.getAttribute(attr);
+      if (val && !isGeneric(val)) return `${tag}[${attr}="${CSS.escape(val)}"]`;
+    }
+
+    // Try significant classes
+    const classes = Array.from(el.classList).filter(c => !isGenericClass(c));
+    if (classes.length > 0) return `${tag}.${CSS.escape(classes[0])}`;
+
+    // Nth-child fallback for this level
+    const parent = el.parentElement;
+    if (parent) {
+      const siblings = Array.from(parent.children);
+      const sameTagSiblings = siblings.filter(s => s.tagName === el.tagName);
+      if (sameTagSiblings.length > 1) {
+        return `${tag}:nth-of-type(${sameTagSiblings.indexOf(el) + 1})`;
+      }
+    }
+
+    return tag;
+  }
+
+  function getFullFallbackPath(el) {
     const path = [];
     let current = el;
-    while (current && current !== document.body && current !== document.documentElement) {
+    while (current && current !== document.body) {
       let selector = current.tagName.toLowerCase();
-      const classes = Array.from(current.classList).filter(c =>
-        c.length > 1 && !c.match(/^(js-|wp-|wp_|col-|row|container|wrapper|clearfix|d-|p-|m-|flex|grid)/)
-      );
-      if (classes.length > 0) {
-        selector += '.' + classes.map(c => CSS.escape(c)).join('.');
-        const test = document.querySelectorAll(buildFullSelector(path, selector));
-        if (test.length === 1) {
-          path.unshift(selector);
-          break;
-        }
-      }
       const parent = current.parentElement;
       if (parent) {
-        const siblings = Array.from(parent.children).filter(c => c.tagName === current.tagName);
-        if (siblings.length > 1) {
-          const idx = siblings.indexOf(current) + 1;
-          selector += ':nth-child(' + idx + ')';
-        }
+        const siblings = Array.from(parent.children);
+        const index = siblings.indexOf(current) + 1;
+        selector += `:nth-child(${index})`;
       }
       path.unshift(selector);
       current = current.parentElement;
+      if (path.length > 5) break; // Don't go too deep
     }
     return path.join(' > ');
-  }
-
-  function buildFullSelector(existingPath, newPart) {
-    return [...existingPath, newPart].join(' > ');
   }
 
   // ─── Collect element attributes ──────────────────────────
@@ -231,6 +332,24 @@ def make_urls_absolute(html: str, base_url: str) -> str:
         html
     )
 
+    # Handle srcset (comma separated values)
+    def fix_srcset(match):
+        attr = match.group(1)
+        val = match.group(2)
+        parts = []
+        for p in val.split(','):
+            p = p.strip()
+            if not p: continue
+            subparts = p.split()
+            if subparts:
+                url = subparts[0]
+                if not url.startswith(('http', 'data:', 'javascript:')):
+                    subparts[0] = urljoin(base_url, url)
+                parts.append(' '.join(subparts))
+        return f'{attr}="{", ".join(parts)}"'
+
+    html = re.sub(r'(srcset)="([^"]+)"', fix_srcset, html)
+
     return html
 
 
@@ -246,10 +365,14 @@ def inject_script_and_clean(html: str, base_url: str) -> str:
 
     # Add <base> tag for relative URLs
     base_tag = f'<base href="{base_url}" target="_blank">'
+    
+    # Inject Neutralizer as very first thing in head
+    head_injection = base_tag + NEUTRALIZER_SCRIPT
+    
     if '<head>' in html.lower():
-        html = re.sub(r'<head[^>]*>', lambda m: m.group(0) + base_tag, html, count=1, flags=re.IGNORECASE)
+        html = re.sub(r'<head[^>]*>', lambda m: m.group(0) + head_injection, html, count=1, flags=re.IGNORECASE)
     elif '<html>' in html.lower():
-        html = re.sub(r'<html[^>]*>', lambda m: m.group(0) + '<head>' + base_tag + '</head>', html, count=1, flags=re.IGNORECASE)
+        html = re.sub(r'<html[^>]*>', lambda m: m.group(0) + '<head>' + head_injection + '</head>', html, count=1, flags=re.IGNORECASE)
 
     # Make relative URLs absolute
     html = make_urls_absolute(html, base_url)

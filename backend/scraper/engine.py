@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import httpx
 from typing import Optional
 from playwright.async_api import async_playwright
+from selectolax.lexbor import LexborHTMLParser
 from scraper.parser import parse_price
 from config import settings
 
@@ -43,11 +45,49 @@ async def scrape_product(
             "error": "No price_selector in strategy",
         }
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+    # --- Phase 1: Fast HTTP Fetch (No JS) ---
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            response = await client.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                parser = LexborHTMLParser(response.text)
+                element = parser.css_first(price_selector)
+                
+                if element:
+                    raw_price = ""
+                    if price_attribute == "textContent":
+                        raw_price = element.text() or ""
+                    else:
+                        raw_price = element.attributes.get(price_attribute, "")
+                    
+                    price = parse_price(raw_price.strip(), remove_chars=remove_chars)
+                    if price is not None:
+                        logger.info(f"✓ Fast Scrape Success for {url}")
+                        return {
+                            "price": price,
+                            "raw_price": raw_price.strip(),
+                            "success": True,
+                            "error": None,
+                            "method": "http"
+                        }
+                
+                logger.debug(f"Selector {price_selector} not found in static HTML for {url}, falling back to Playwright")
+            else:
+                logger.warning(f"HTTP fetch failed for {url} (Status: {response.status_code}), falling back to Playwright")
 
+    except Exception as e:
+        logger.debug(f"HTTP fetch error for {url}: {str(e)}, falling back to Playwright")
+
+    # --- Phase 2: Full Browser Fallback (JS Enabled) ---
+    async with async_playwright() as p:
         try:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+
             await page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
 
             # Wait for the target element to appear
@@ -71,6 +111,7 @@ async def scrape_product(
                 "raw_price": raw_price.strip(),
                 "success": price is not None,
                 "error": None if price is not None else "Failed to extract price",
+                "method": "playwright"
             }
 
         except Exception as e:
@@ -80,9 +121,11 @@ async def scrape_product(
                 "raw_price": "",
                 "success": False,
                 "error": str(e),
+                "method": "failed"
             }
         finally:
-            await browser.close()
+            if 'browser' in locals():
+                await browser.close()
 
 
 async def scrape_with_retry(

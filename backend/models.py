@@ -82,7 +82,7 @@ class PriceHistory(Base):
     price = Column(Numeric(10, 2), nullable=True)
     stock = Column(String(50), nullable=True)
     price_diff = Column(Numeric(10, 2), nullable=True)
-    price_diff_percent = Column(Numeric(5, 2), nullable=True)
+    price_diff_percent = Column(Numeric(10, 2), nullable=True)
     scraped_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
