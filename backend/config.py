@@ -31,6 +31,7 @@ class Settings:
     REQUEST_DELAY_SECONDS: int = int(os.getenv("REQUEST_DELAY_SECONDS", "2"))
     SCRAPE_TIMEOUT_SECONDS: int = int(os.getenv("SCRAPE_TIMEOUT_SECONDS", "30"))
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
+    ENABLE_BROWSER_SCRAPING: bool = os.getenv("ENABLE_BROWSER_SCRAPING", "false").lower() == "true"
 
     @property
     def DATABASE_URL(self) -> str:

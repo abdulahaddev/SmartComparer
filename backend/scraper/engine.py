@@ -2,7 +2,6 @@ import asyncio
 import logging
 import httpx
 from typing import Optional
-from playwright.async_api import async_playwright
 from selectolax.lexbor import LexborHTMLParser
 from scraper.parser import parse_price
 from config import settings
@@ -83,9 +82,29 @@ async def scrape_product(
         logger.debug(f"HTTP fetch error for {url}: {str(e)}, falling back to Playwright")
 
     # --- Phase 2: Full Browser Fallback (JS Enabled) ---
+    if not settings.ENABLE_BROWSER_SCRAPING:
+        logger.info(f"Playwright fallback disabled. Skipping JS scrape for {url}")
+        return {
+            "price": None,
+            "raw_price": "",
+            "success": False,
+            "error": "Browser-based scraping is disabled",
+            "method": "skipped"
+        }
+
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        logger.error("Playwright is not installed. Cannot use browser fallback.")
+        return {
+            "price": None,
+            "raw_price": "",
+            "success": False,
+            "error": "Playwright library is not installed",
+            "method": "missing_dependency"
+        }
+
     # Run Playwright in a dedicated thread with its own event loop.
-    # This avoids the Windows NotImplementedError when the main loop
-    # is a SelectorEventLoop (which can't spawn subprocesses).
     import concurrent.futures
     import sys
 
