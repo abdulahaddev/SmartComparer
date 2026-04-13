@@ -17,6 +17,7 @@ backend/htmlcov/
 backend/venv/
 backend/.env
 backend/*.sqlite3
+backend/dist/
 
 # --- Frontend (Angular) ---
 frontend/node_modules/

@@ -9,3 +9,5 @@ python-dotenv==1.1.0
 pydantic[email]==2.11.3
 playwright==1.52.0
 httpx==0.28.1
+a2wsgi==1.10.8
+selectolax==0.3.27
